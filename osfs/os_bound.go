@@ -267,8 +267,22 @@ func (fs *BoundOS) isBaseDir(path string) bool {
 }
 
 func (fs *BoundOS) absNoFollow(filename string) (string, error) {
+	filename = fs.expandDot(filename)
+	if root, rel, ok := fs.splitRootedHostPath(filename); ok {
+		if rel == "" {
+			return root, nil
+		}
+
+		parent, err := securejoin.SecureJoinVFS(root, filepath.Dir(rel), boundOSVFS{})
+		if err != nil {
+			return "", err
+		}
+
+		return filepath.Join(parent, filepath.Base(rel)), nil
+	}
+
 	if fs.baseDir == "" {
-		return filepath.Clean(fs.expandDot(filename)), nil
+		return filepath.Clean(filename), nil
 	}
 
 	rel := fs.rootRelative(filename)
@@ -332,7 +346,53 @@ func (fs *BoundOS) secureJoin(path string) (string, error) {
 	if filepath.Separator != '\\' {
 		return securejoin.SecureJoin(fs.baseDir, path)
 	}
+	if root, rel, ok := fs.splitRootedHostPath(path); ok {
+		return securejoin.SecureJoinVFS(root, rel, boundOSVFS{})
+	}
 	return securejoin.SecureJoinVFS(fs.baseDir, path, boundOSVFS{})
+}
+
+func (fs *BoundOS) splitRootedHostPath(path string) (root, rel string, ok bool) {
+	if filepath.Separator != '\\' || !isWindowsHostRoot(fs.baseDir) {
+		return "", "", false
+	}
+
+	path = trimLeadingWindowsDriveSlash(filepath.FromSlash(path))
+	vol := filepath.VolumeName(path)
+	if vol == "" {
+		return "", "", false
+	}
+
+	rest := path[len(vol):]
+	if rest == "" {
+		if len(vol) == 2 && vol[1] == ':' {
+			return "", "", false
+		}
+		return vol + string(filepath.Separator), "", true
+	}
+	if !isWindowsPathSeparator(rest[0]) {
+		return "", "", false
+	}
+
+	return vol + string(filepath.Separator), strings.TrimLeft(rest, `\/`), true
+}
+
+func isWindowsHostRoot(base string) bool {
+	if base == "" {
+		return true
+	}
+	return filepath.Clean(filepath.FromSlash(base)) == string(filepath.Separator)
+}
+
+func trimLeadingWindowsDriveSlash(path string) string {
+	if len(path) >= 3 && isWindowsPathSeparator(path[0]) && path[2] == ':' {
+		return path[1:]
+	}
+	return path
+}
+
+func isWindowsPathSeparator(c byte) bool {
+	return c == '\\' || c == '/'
 }
 
 type boundOSVFS struct{}

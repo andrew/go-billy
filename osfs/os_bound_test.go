@@ -28,6 +28,7 @@ import (
 
 	securejoin "github.com/cyphar/filepath-securejoin"
 	"github.com/go-git/go-billy/v6"
+	"github.com/go-git/go-billy/v6/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -236,6 +237,62 @@ func TestWindowsOpenBackslashDotPaths(t *testing.T) {
 			require.NoError(t, f.Close())
 		})
 	}
+}
+
+func TestWindowsRootFilesystemsAcceptDriveAbsolutePaths(t *testing.T) {
+	if filepath.Separator != '\\' {
+		t.Skip("drive-qualified absolute paths are only used on windows")
+	}
+
+	dir := t.TempDir()
+	nested := filepath.Join(dir, "nested")
+	filePath := filepath.Join(nested, "test-file")
+
+	require.NoError(t, Default.MkdirAll(nested, 0o700))
+	require.NoError(t, os.WriteFile(filePath, []byte("anything"), 0o600))
+
+	for _, openPath := range []string{filePath, filepath.ToSlash(filePath)} {
+		t.Run(openPath, func(t *testing.T) {
+			f, err := Default.Open(openPath)
+			require.NoError(t, err)
+			require.NotNil(t, f)
+			require.NoError(t, f.Close())
+		})
+	}
+
+	fi, err := Default.Stat(filePath)
+	require.NoError(t, err)
+	assert.Equal(t, "test-file", fi.Name())
+
+	entries, err := Default.ReadDir(nested)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "test-file", entries[0].Name())
+
+	rooted, err := New("").Chroot(nested)
+	require.NoError(t, err)
+	f, err := rooted.Open("test-file")
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+}
+
+func TestWindowsDefaultTempDir(t *testing.T) {
+	if filepath.Separator != '\\' {
+		t.Skip("drive-qualified temporary paths are only used on windows")
+	}
+
+	dir, err := util.TempDir(Default, "", "billy-default")
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, util.RemoveAll(Default, dir))
+	}()
+
+	filename := filepath.Join(dir, "test-file")
+	require.NoError(t, util.WriteFile(Default, filename, []byte("anything"), 0o600))
+
+	got, err := util.ReadFile(Default, filename)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("anything"), got)
 }
 
 func Test_Symlink(t *testing.T) {
